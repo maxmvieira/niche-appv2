@@ -77,16 +77,12 @@ def search_viral_videos():
         min_views = request.args.get("min_views", default=10000, type=int) # Adjusted default for viral
         max_channel_videos_total = request.args.get("max_channel_videos_total", default=50, type=int)
         platform_filter = request.args.get("platform", default="all", type=str)
-        
-        # Parâmetros de paginação
-        page_size = request.args.get("page_size", default=100, type=int)  # Tamanho da página (resultados por página)
-        page = request.args.get("page", default=1, type=int)  # Número da página atual
 
         selected_niches = [n.strip() for n in niches_str.split(",") if n.strip()] if niches_str else []
         if not selected_niches:
             return jsonify({"error": "No niches provided"}), 400
 
-        current_app.logger.info(f"Search Params: niches={selected_niches}, published_days_max={video_published_days_ago_max}, max_subs={max_subs}, min_views={min_views}, max_channel_videos={max_channel_videos_total}, platform={platform_filter}, page={page}, page_size={page_size}")
+        current_app.logger.info(f"Search Params: niches={selected_niches}, published_days_max={video_published_days_ago_max}, max_subs={max_subs}, min_views={min_views}, max_channel_videos={max_channel_videos_total}, platform={platform_filter}")
 
         youtube_results = []
         tiktok_results = [] # Placeholder for TikTok
@@ -102,46 +98,26 @@ def search_viral_videos():
             all_video_ids_yt = []
             video_to_niche_map_yt = {}
 
-            # Número de páginas a buscar por nicho (aumentado para obter mais resultados)
-            pages_per_niche = 3
-            max_results_per_page = 50  # Máximo permitido pela API do YouTube
-
             for niche in selected_niches:
                 try:
                     query = f"{niche} #shorts"
                     current_app.logger.info(f"Searching YouTube for query: {query}")
+                    # Corrected block for searching videos for a niche
+                    search_request = youtube.search().list(
+                        q=query,
+                        part="id",
+                        type="video",
+                        videoDuration="short", # Specifically for shorts
+                        maxResults=50 # Max per page
+                    )
+                    search_response = search_request.execute()
                     
-                    # Busca paginada para cada nicho
-                    next_page_token = None
-                    pages_fetched = 0
-                    
-                    while pages_fetched < pages_per_niche:
-                        # Configuração da busca com suporte a paginação
-                        search_request = youtube.search().list(
-                            q=query,
-                            part="id",
-                            type="video",
-                            videoDuration="short", # Specifically for shorts
-                            maxResults=max_results_per_page,  # Máximo permitido pela API
-                            pageToken=next_page_token
-                        )
-                        search_response = search_request.execute()
-                        
-                        for item in search_response.get("items", []):
-                            video_id = item.get("id", {}).get("videoId")
-                            if video_id:
-                                all_video_ids_yt.append(video_id)
-                                video_to_niche_map_yt[video_id] = niche
-                        
-                        # Verifica se há mais páginas
-                        next_page_token = search_response.get("nextPageToken")
-                        pages_fetched += 1
-                        
-                        # Se não houver mais páginas, sai do loop
-                        if not next_page_token:
-                            break
-                            
-                    current_app.logger.info(f"Found videos for niche '{niche}' across {pages_fetched} pages.")
+                    for item in search_response.get("items", []):
+                        video_id = item.get("id", {}).get("videoId")
+                        if video_id:
+                            all_video_ids_yt.append(video_id)
+                            video_to_niche_map_yt[video_id] = niche
+                    current_app.logger.info(f"Found {len(search_response.get('items', []))} videos for niche '{niche}'.")
 
                 except HttpError as e:
                     # Log HttpError and continue to the next niche, or decide to return early
@@ -273,40 +249,14 @@ def search_viral_videos():
 
         combined_results = youtube_results + tiktok_results
         combined_results.sort(key=lambda x: x.get("viewCount", 0), reverse=True)
-        
-        # Implementação de paginação no backend
-        total_results = len(combined_results)
-        total_pages = (total_results + page_size - 1) // page_size if total_results > 0 else 1
-        
-        # Garantir que a página solicitada é válida
-        if page < 1:
-            page = 1
-        elif page > total_pages:
-            page = total_pages
-            
-        # Calcular índices de início e fim para a página atual
-        start_idx = (page - 1) * page_size
-        end_idx = min(start_idx + page_size, total_results)
-        
-        # Obter resultados para a página atual
-        paginated_results = combined_results[start_idx:end_idx]
-        
-        # Adicionar metadados de paginação à resposta
-        response_data = {
-            "results": paginated_results,
-            "pagination": {
-                "page": page,
-                "page_size": page_size,
-                "total_pages": total_pages,
-                "total_results": total_results
-            }
-        }
+        paginated_results = combined_results[:40]
 
-        current_app.logger.info(f"Returning {len(paginated_results)} results for page {page} of {total_pages}. Total results: {total_results} (YouTube: {len(youtube_results)}, TikTok: {len(tiktok_results)})")
-        return jsonify(response_data), 200
+        current_app.logger.info(f"Returning {len(paginated_results)} combined results. YouTube: {len(youtube_results)}, TikTok: {len(tiktok_results)}")
+        return jsonify(paginated_results), 200
 
     except HttpError as e:
         return handle_youtube_api_error(e)
     except Exception as e:
         current_app.logger.error(f"Critical error in /viral-videos endpoint: {str(e)}", exc_info=True)
         return jsonify({"error": "An internal server error occurred.", "details": str(e)}), 500
+

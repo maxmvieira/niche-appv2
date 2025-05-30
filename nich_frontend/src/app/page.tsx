@@ -5,18 +5,13 @@ import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Heart, ListFilter, ArrowUpDown, ChevronLeft, ChevronRight, LayoutDashboard, Zap, DollarSign, MessageSquare, UserCircle, LogOut, Disc, MenuIcon, Flame } from "lucide-react";
+import { Heart, MenuIcon, ChevronLeft, ChevronRight, LayoutDashboard, LogOut, Flame, Search, BookmarkIcon, MessageCircle, ExternalLink } from "lucide-react";
 
 import { saveAs } from "file-saver";
 import Papa from "papaparse";
 import { loadStripe } from "@stripe/stripe-js";
-
-// Importações de tradução
-import ptTranslations from "../../locales/pt.json";
-import enTranslations from "../../locales/en.json";
 
 interface NichResult {
   channelName: string;
@@ -35,33 +30,38 @@ interface NichResult {
   thumbnailUrl?: string;
 }
 
+// Interface para os metadados de paginação
+interface PaginationInfo {
+  page: number;
+  page_size: number;
+  total_pages: number;
+  total_results: number;
+}
+
+// Interface para a resposta da API
+interface ApiResponse {
+  results: NichResult[];
+  pagination: PaginationInfo;
+}
+
 const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "pk_test_51RK6VmGbde7HGq89NHb4oCLxCVsgZReaNSZoDga95udXG6OEBjh318rcDiq5YuBdmV1xyAFjwKgKLp2917dybuOj00ALSJuLD8";
 const stripePromise = loadStripe(STRIPE_PUBLISHABLE_KEY);
 
 const availableNiches = [
-  "Motivacional", "Política", "FamilyGuy", "Basketball", "Finance", "History", "Quiz", "Animals",
-  "Séries", "TV Shows", "Educacional", "Geography", "Horror Stories",
+  "Motivational", "Politics", "FamilyGuy", "Basketball", "Finance", "History", "Quiz", "Animals",
+  "Series", "TV Shows", "Educational", "Geography", "Horror Stories",
   "Fitness", "Ranking Content", "Reddit Stories", "Crypto", "Travel",
   "Storytelling", "Gaming", "Lifestyle", "Food & Drink"
 ];
 
 const ITEMS_PER_PAGE = 20;
 
-interface Translations {
-  [key: string]: string;
-}
-
-const translations: { [key: string]: Translations } = {
-  "pt-BR": ptTranslations,
-  "en-US": enTranslations,
-};
-
 export default function Home() {
   const [selectedNiches, setSelectedNiches] = useState<string[]>([]);
-  const [videoPublishedDays, setVideoPublishedDays] = useState("30");
-  const [maxSubs, setMaxSubs] = useState("10000");
-  const [minViews, setMinViews] = useState("50000");
-  const [maxChannelVideosTotal, setMaxChannelVideosTotal] = useState("50");
+  const [videoPublishedDays, setVideoPublishedDays] = useState("90");
+  const [maxSubs, setMaxSubs] = useState("100000");
+  const [minViews, setMinViews] = useState("1000");
+  const [maxChannelVideosTotal, setMaxChannelVideosTotal] = useState("999999");
 
   const [allResults, setAllResults] = useState<NichResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -71,17 +71,45 @@ export default function Home() {
   const [checkingSubscription, setCheckingSubscription] = useState(true);
 
   const [favoritedVideos, setFavoritedVideos] = useState<string[]>([]);
+  const [savedChannels, setSavedChannels] = useState<NichResult[]>([]);
+  const [showSavedChannels, setShowSavedChannels] = useState(false);
 
   const [platformFilter, setPlatformFilter] = useState<string>("YouTube Shorts");
   const [sortBy, setSortBy] = useState<string>("views_desc");
   const [currentPage, setCurrentPage] = useState(1);
-  const [currentLang, setCurrentLang] = useState("pt-BR");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [showLangOverlay, setShowLangOverlay] = useState(false);
+  const [showLangOverlay] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  
+  // Novos estados para paginação da API
+  const [apiCurrentPage, setApiCurrentPage] = useState(1);
+  const [apiPageSize, setApiPageSize] = useState(100);
+  const [apiTotalPages, setApiTotalPages] = useState(1);
+  const [apiTotalResults, setApiTotalResults] = useState(0);
 
-  const t = (key: string): string => {
-    return translations[currentLang]?.[key] || key;
-  };
+  // Load saved channels from localStorage on component mount
+  useEffect(() => {
+    const loadSavedChannels = () => {
+      const savedChannelsStr = localStorage.getItem('savedChannels');
+      if (savedChannelsStr) {
+        try {
+          const savedData = JSON.parse(savedChannelsStr);
+          setSavedChannels(savedData);
+        } catch (err) {
+          console.error("Error loading saved channels:", err);
+        }
+      }
+    };
+    
+    loadSavedChannels();
+  }, []);
+
+  // Save to localStorage whenever savedChannels changes
+  useEffect(() => {
+    if (savedChannels.length > 0) {
+      localStorage.setItem('savedChannels', JSON.stringify(savedChannels));
+    }
+  }, [savedChannels]);
 
   useEffect(() => {
     const checkSub = async () => {
@@ -92,7 +120,7 @@ export default function Home() {
           setIsSubscribed(true);
         }
       } catch (err) {
-        console.error("Falha ao verificar assinatura:", err);
+        console.error("Failed to verify subscription:", err);
         setIsSubscribed(false);
       } finally {
         setCheckingSubscription(false);
@@ -101,31 +129,6 @@ export default function Home() {
     checkSub();
   }, []);
 
-  const [initialSuggestions, setInitialSuggestions] = useState<NichResult[]>([]);
-
-  {/* Nichos carregados aletaróriamente */}
-  useEffect(() => {
-    const fetchInitialSuggestions = async () => {
-      try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
-        const randomNiches = ["Conteúdo de Ranking", "Fitness", "Crypto", "Animals", "Travel"];
-        const response = await fetch(`${backendUrl}/api/search/viral-videos?niches=${randomNiches.join(",")}&video_published_days=30&min_views=10000&max_subs=50000&max_channel_videos_total=50`);
-        const data: NichResult[] = await response.json();
-
-        // Remover vídeos duplicados com base em videoLink
-        const uniqueVideos = Array.from(new Map(data.map(item => [item.videoLink, item])).values());
-
-        setInitialSuggestions(uniqueVideos.slice(0, 4)); // Apenas 4 vídeos únicos
-      } catch (error) {
-        console.error("Erro ao carregar sugestões iniciais:", error);
-      }
-    };
-
-    fetchInitialSuggestions();
-  }, []);
-
-
-
   const handleNicheChange = (niche: string) => {
     setSelectedNiches(prev =>
       prev.includes(niche) ? prev.filter(n => n !== niche) : [...prev, niche]
@@ -133,19 +136,42 @@ export default function Home() {
     setCurrentPage(1);
   };
 
-  const toggleFavorite = (videoLink: string) => {
+  // Função para abrir o link do vídeo em uma nova aba
+  const openVideoLink = (videoLink: string) => {
+    window.open(videoLink, '_blank');
+  };
+
+  const toggleFavorite = (event: React.MouseEvent, result: NichResult) => {
+    // Impedir que o clique no botão de favorito também abra o link do vídeo
+    event.stopPropagation();
+    
+    const videoLink = result.videoLink;
+    
+    // Update favorited videos list
     setFavoritedVideos(prev =>
       prev.includes(videoLink) ? prev.filter(link => link !== videoLink) : [...prev, videoLink]
     );
+    
+    // Update saved channels list
+    setSavedChannels(prev => {
+      // If already saved, remove it
+      if (prev.some(item => item.videoLink === videoLink)) {
+        return prev.filter(item => item.videoLink !== videoLink);
+      } 
+      // Otherwise add it
+      else {
+        return [...prev, result];
+      }
+    });
   };
 
   const handleSearch = async () => {
     if (!isSubscribed && !checkingSubscription) {
-      setError(t("error_only_subscribers"));
+      setError("Only subscribers can use this feature");
       return;
     }
     if (selectedNiches.length === 0) {
-      setError(t("error_select_niche"));
+      setError("Please select at least one niche");
       return;
     }
 
@@ -153,6 +179,10 @@ export default function Home() {
     setError(null);
     setAllResults([]);
     setCurrentPage(1);
+    setShowSavedChannels(false);
+    
+    // Resetar a página da API para 1 ao iniciar uma nova busca
+    setApiCurrentPage(1);
 
     const searchParams = {
       niches: selectedNiches.join(","),
@@ -160,6 +190,8 @@ export default function Home() {
       max_subs: maxSubs,
       min_views: minViews,
       max_channel_videos_total: maxChannelVideosTotal,
+      page: "1",  // Começar sempre pela primeira página
+      page_size: apiPageSize.toString()
     };
 
     const params = new URLSearchParams(searchParams);
@@ -170,21 +202,89 @@ export default function Home() {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `Erro HTTP: ${response.status}`);
+        throw new Error(errorData.error || `HTTP Error: ${response.status}`);
       }
 
-      const data: NichResult[] = await response.json();
-      setAllResults(data);
+      // Nova estrutura de resposta com paginação
+      const responseData: ApiResponse = await response.json();
+      
+      // Extrair os resultados e metadados de paginação
+      const results = responseData.results || [];
+      const paginationInfo = responseData.pagination || {
+        page: 1,
+        page_size: apiPageSize,
+        total_pages: 1,
+        total_results: results.length
+      };
+      
+      // Atualizar estados com os dados recebidos
+      setAllResults(results);
+      setApiCurrentPage(paginationInfo.page);
+      setApiPageSize(paginationInfo.page_size);
+      setApiTotalPages(paginationInfo.total_pages);
+      setApiTotalResults(paginationInfo.total_results);
+      
+      console.log(`Mostrando ${results.length} de ${paginationInfo.total_results} resultados totais (Página ${paginationInfo.page} de ${paginationInfo.total_pages})`);
 
     } catch (err: any) {
-      console.error(t("error_search_failed"), err);
-      setError(err.message || t("error_fetch_data"));
+      console.error("Search failed:", err);
+      setError(err.message || "Failed to fetch data");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Função para carregar uma página específica da API
+  const loadApiPage = async (pageNumber: number) => {
+    if (pageNumber < 1 || pageNumber > apiTotalPages || pageNumber === apiCurrentPage) return;
+    
+    setIsLoading(true);
+    setError(null);
+    
+    const searchParams = {
+      niches: selectedNiches.join(","),
+      video_published_days: videoPublishedDays,
+      max_subs: maxSubs,
+      min_views: minViews,
+      max_channel_videos_total: maxChannelVideosTotal,
+      page: pageNumber.toString(),
+      page_size: apiPageSize.toString()
+    };
+    
+    const params = new URLSearchParams(searchParams);
+    
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+      const response = await fetch(`${backendUrl}/api/search/viral-videos?${params.toString()}`);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP Error: ${response.status}`);
+      }
+
+      const responseData: ApiResponse = await response.json();
+      const results = responseData.results || [];
+      
+      setAllResults(results);
+      setApiCurrentPage(responseData.pagination.page);
+      setCurrentPage(1); // Reset local pagination when changing API page
+      
+      console.log(`Carregada página ${responseData.pagination.page} de ${responseData.pagination.total_pages} (${results.length} resultados)`);
+      
+    } catch (err: any) {
+      console.error("Failed to load page:", err);
+      setError(err.message || "Failed to load page");
     } finally {
       setIsLoading(false);
     }
   };
 
   const filteredAndSortedResults = useMemo(() => {
+    // If showing saved channels, return those instead
+    if (showSavedChannels) {
+      return [...savedChannels];
+    }
+    
     let filtered = [...allResults];
     if (platformFilter !== "all") {
       filtered = filtered.filter(result => result.platform === platformFilter);
@@ -206,7 +306,7 @@ export default function Home() {
         break;
     }
     return filtered;
-  }, [allResults, platformFilter, sortBy]);
+  }, [allResults, platformFilter, sortBy, savedChannels, showSavedChannels]);
 
   const totalPages = Math.ceil(filteredAndSortedResults.length / ITEMS_PER_PAGE);
   const paginatedResults = useMemo(() => {
@@ -241,58 +341,30 @@ export default function Home() {
       });
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || t("error_checkout_session"));
+        throw new Error(errorData.error || "Error creating checkout session");
       }
       const session = await response.json();
       const stripe = await stripePromise;
       if (!stripe) {
-        throw new Error(t("error_stripe_load"));
+        throw new Error("Failed to load Stripe");
       }
       const { error } = await stripe.redirectToCheckout({
         sessionId: session.sessionId,
       });
       if (error) {
-        console.error("Erro no checkout Stripe:", error);
-        setError(error.message || t("error_stripe_checkout"));
+        console.error("Stripe checkout error:", error);
+        setError(error.message || "Stripe checkout failed");
       }
     } catch (err: any) {
-      console.error("Falha no checkout:", err);
-      setError(err.message || t("error_payment_generic"));
+      console.error("Checkout failed:", err);
+      setError(err.message || "Payment processing failed");
     }
   };
 
-
   const sidebarNavItems = [
-  { nameKey: "sidebar_dashboard", icon: LayoutDashboard, href: "#", current: true },
-  { nameKey: "sidebar_outlier", icon: Zap, href: "#", current: false, new: true },
-  { nameKey: "sidebar_viral_simulator", icon: Flame, href: "#", current: false, soon: true },
-];
-
-
- // const sidebarNavItems = [
- //   { nameKey: "sidebar_dashboard", icon: LayoutDashboard, href: "#", current: true },
-   // { nameKey: "sidebar_creator_search", icon: Search, href: "#", current: false },
-   // { nameKey: "sidebar_find_editor", icon: Users, href: "#", current: false },
-   // { nameKey: "sidebar_collections", icon: Folder, href: "#", current: false },
-//    { nameKey: "sidebar_outlier", icon: Zap, href: "#", current: false, new: true },
-   // { nameKey: "sidebar_viral_simulator", icon: TrendingUp, href: "#", current: false, soon: true },
-  //  { nameKey: "sidebar_billing", icon: DollarSign, href: "#", current: false },
-//  ];
-
-  const sidebarBottomNavItems = [
-    { nameKey: "sidebar_feedback", icon: MessageSquare, href: "#" },
-    { nameKey: "sidebar_account", icon: UserCircle, href: "#" },
-    { nameKey: "sidebar_logout", icon: LogOut, href: "#" },
+    { nameKey: "Filters", icon: LayoutDashboard, href: "#", current: !showSavedChannels, onClick: () => setShowSavedChannels(false) },
+    { nameKey: "Saved Channels", icon: BookmarkIcon, href: "#", current: showSavedChannels, onClick: () => setShowSavedChannels(true) },
   ];
-
-  const changeLanguage = (lang: string) => {
-    if (lang === currentLang) return;
-    setShowLangOverlay(true);
-    setTimeout(() => {
-      setCurrentLang(lang);
-      setShowLangOverlay(false);
-    }, 400);
-  };
 
   const toggleSidebar = () => {
     setIsSidebarCollapsed(!isSidebarCollapsed);
@@ -305,397 +377,479 @@ export default function Home() {
   };
 
   const getNicheEmoji = (niche?: string): string => {
-    // Mapeamento simples, pode ser expandido
-    if (niche?.toLowerCase().includes("crypto")) return "💰";
-    if (niche?.toLowerCase().includes("gaming")) return "🎮";
-    if (niche?.toLowerCase().includes("food")) return "🍔";
-    if (niche?.toLowerCase().includes("travel")) return "✈️";
-    return "😊"; // Emoji padrão como na referência
+    // Enhanced emoji mapping
+    if (!niche) return "📊";
+    
+    const nicheLC = niche.toLowerCase();
+    
+    if (nicheLC.includes("crypto")) return "💰";
+    if (nicheLC.includes("gaming")) return "🎮";
+    if (nicheLC.includes("food")) return "🍔";
+    if (nicheLC.includes("travel")) return "✈️";
+    if (nicheLC.includes("politics")) return "👔";
+    if (nicheLC.includes("motivational")) return "💪";
+    if (nicheLC.includes("basketball")) return "🏀";
+    if (nicheLC.includes("finance")) return "💵";
+    if (nicheLC.includes("history")) return "📜";
+    if (nicheLC.includes("quiz")) return "❓";
+    if (nicheLC.includes("animals")) return "🐾";
+    if (nicheLC.includes("series") || nicheLC.includes("tv")) return "📺";
+    if (nicheLC.includes("educational")) return "📚";
+    if (nicheLC.includes("geography")) return "🌍";
+    if (nicheLC.includes("horror")) return "👻";
+    if (nicheLC.includes("fitness")) return "🏋️";
+    if (nicheLC.includes("ranking")) return "📊";
+    if (nicheLC.includes("reddit")) return "📱";
+    if (nicheLC.includes("storytelling")) return "📖";
+    if (nicheLC.includes("lifestyle")) return "🌿";
+    
+    return "📈"; // Default emoji
+  };
+
+  // Função para formatar números grandes (ex: 94.498.217 -> 94M)
+  const formatLargeNumber = (num: number): string => {
+    if (num >= 1000000) {
+      return `${(num / 1000000).toFixed(1)}M`;
+    } else if (num >= 1000) {
+      return `${(num / 1000).toFixed(1)}K`;
+    } else {
+      return num.toString();
+    }
+  };
+
+  // Função para formatar data de forma mais legível
+  const formatDate = (dateString: string): string => {
+    const date = new Date(dateString);
+    const day = date.getDate();
+    const month = date.getMonth() + 1;
+    const year = date.getFullYear();
+    return `${day < 10 ? '0' + day : day}/${month < 10 ? '0' + month : month}/${year}`;
   };
 
   return (
-    <div className={`flex min-h-screen bg-custom-dark-bg text-custom-text-primary font-sans transition-all duration-300 ease-in-out`}>
-      {showLangOverlay && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center transition-opacity duration-300 ease-in-out opacity-100"></div>
-      )}
-      <aside className={`bg-custom-card-bg p-4 space-y-6 fixed h-full flex flex-col justify-between border-r border-custom-border-color transition-all duration-300 ease-in-out ${isSidebarCollapsed ? "w-20" : "w-64"}`}>
-        <div>
-          <div className={`flex items-center ${isSidebarCollapsed ? "justify-center" : "justify-between"} mb-10`}>
+    <>
+      {/* Estilos globais para a barra de rolagem personalizada */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        /* Estilização moderna da barra de rolagem */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.2);
+          border-radius: 10px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #f59e0b 0%, #d97706 100%);
+          border-radius: 10px;
+          border: 1px solid rgba(0, 0, 0, 0.2);
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, #f59e0b 30%, #b45309 100%);
+          box-shadow: 0 0 5px rgba(245, 158, 11, 0.5);
+        }
+        
+        /* Firefox */
+        .custom-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #f59e0b rgba(0, 0, 0, 0.2);
+        }
+      `}} />
+    
+      <div className={`flex min-h-screen bg-custom-dark-bg text-custom-text-primary font-sans transition-all duration-300 ease-in-out`}>
+        {showLangOverlay && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center transition-opacity duration-300 ease-in-out opacity-100"></div>
+        )}
+        <aside className={`bg-custom-card-bg p-4 fixed h-full flex flex-col border-r border-custom-border-color transition-all duration-300 ease-in-out ${isSidebarCollapsed ? "w-20" : "w-64"}`}>
+          {/* Cabeçalho da barra lateral */}
+          <div className={`flex items-center ${isSidebarCollapsed ? "justify-center" : "justify-between"} mb-4`}>
             {!isSidebarCollapsed && <h1 className="text-3xl font-bold text-custom-yellow-accent">NICHE</h1>}
             <Button variant="ghost" size="icon" onClick={toggleSidebar} className="text-custom-text-secondary hover:text-custom-yellow-accent hover:bg-custom-dark-bg">
               {isSidebarCollapsed ? <MenuIcon className="h-6 w-6" /> : <ChevronLeft className="h-6 w-6" />}
             </Button>
           </div>
-          <nav className="space-y-2">
-            {sidebarNavItems.map((item) => (
-              <a
-                key={item.nameKey}
-                href={item.href}
-                title={!isSidebarCollapsed ? "" : t(item.nameKey)}
-                className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${isSidebarCollapsed ? "justify-center" : ""} ${item.current ? "bg-custom-yellow-accent text-custom-text-on-yellow font-semibold" : "hover:bg-custom-dark-bg hover:text-custom-yellow-accent text-custom-text-secondary"}`}
-              >
-                <item.icon className={`h-5 w-5 ${isSidebarCollapsed ? "mx-auto" : ""}`} />
-                {!isSidebarCollapsed && <span>{t(item.nameKey)}</span>}
-                {!isSidebarCollapsed && item.new && <span className="ml-auto text-xs bg-green-500 text-white px-1.5 py-0.5 rounded-full">{t("new_badge")}</span>}
-                {!isSidebarCollapsed && item.soon && <span className="ml-auto text-xs bg-orange-500 text-white px-1.5 py-0.5 rounded-full">{t("soon_badge")}</span>}
-              </a>
-            ))}
-          </nav>
-        </div>
-        <div>
-          <nav className="space-y-2 mb-4">
-            {sidebarBottomNavItems.map((item) => (
-              <a
-                key={item.nameKey}
-                href={item.href}
-                title={!isSidebarCollapsed ? "" : t(item.nameKey)}
-                className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg hover:bg-custom-dark-bg hover:text-custom-yellow-accent text-custom-text-secondary transition-colors ${isSidebarCollapsed ? "justify-center" : ""}`}
-              >
-                <item.icon className={`h-5 w-5 ${isSidebarCollapsed ? "mx-auto" : ""}`} />
-                {!isSidebarCollapsed && <span>{t(item.nameKey)}</span>}
-              </a>
-            ))}
-          </nav>
-          {!isSidebarCollapsed && (
-            <>
-              <Button variant="outline" className="w-full mb-2 bg-green-500 hover:bg-green-600 text-white border-green-500 font-semibold">
-                <DollarSign className="mr-2 h-4 w-4" /> {t("sidebar_affiliate_program")}
-              </Button>
-              <Button variant="outline" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600 font-semibold">
-                <Disc className="mr-2 h-4 w-4" /> {t("sidebar_join_discord")}
-              </Button>
-            </>
-          )}
-        </div>
-      </aside>
-
-      <main className={`flex-1 p-6 md:p-10 overflow-y-auto transition-all duration-300 ease-in-out ${isSidebarCollapsed ? "ml-20" : "ml-64"}`}>
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h2 className="text-3xl font-semibold text-custom-text-primary">{t("welcome_back")}</h2>
-{/* NOVA SEÇÃO: Nichos clicáveis visíveis */}
-        <div className="flex flex-wrap gap-3 mb-10">
-          {availableNiches.map((niche) => (
-            <Button
-              key={niche}
-              onClick={() => handleNicheChange(niche)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-medium transition-colors shadow-sm ${
-                selectedNiches.includes(niche)
-                  ? "bg-pink-600 text-white border-pink-600"
-                  : "bg-custom-card-bg text-custom-text-secondary border-custom-border-color hover:border-pink-500 hover:text-pink-500"
-              }`}
-            >
-              <span>{getNicheEmoji(niche)}</span>
-              <span>{t(niche.toLowerCase().replace(/\s|&/g, "_"))}</span>
-            </Button>
-          ))}
-        </div>
-
-          </div>
-          <div className="flex items-center space-x-4">
-            <button onClick={() => changeLanguage("pt-BR")} title={t("portuguese_brazil")} className={`p-1 rounded-md ${currentLang === "pt-BR" ? "bg-custom-yellow-accent ring-2 ring-custom-yellow-hover" : "hover:bg-custom-card-bg"}`}>
-              <img src="/assets/images/flag_br.png" alt={t("portuguese_brazil")} className="w-8 h-5 object-cover rounded" />
-            </button>
-            <button onClick={() => changeLanguage("en-US")} title={t("english")} className={`p-1 rounded-md ${currentLang === "en-US" ? "bg-custom-yellow-accent ring-2 ring-custom-yellow-hover" : "hover:bg-custom-card-bg"}`}>
-              <img src="/assets/images/flag_uk.png" alt={t("english")} className="w-8 h-5 object-cover rounded" />
-            </button>
-            <img src="/assets/images/profile_placeholder.png" alt={t("user_avatar")} className="w-10 h-10 rounded-full border-2 border-custom-yellow-accent object-cover" />
-          </div>
-        </div>
-{/* CARDS ALEATÓRIOS DA BUSCA     */}
-        {initialSuggestions.length > 0 && (
-          <section className="mb-10">
-            <h2 className="text-2xl font-semibold text-custom-yellow-accent mb-4">
-              {t("Vídeos virais do momento") || "Vídeos virais do momento"}
-            </h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {initialSuggestions.map((result, index) => (
-                <Card key={`${result.videoLink}-${index}`} className="bg-custom-card-bg border border-custom-border-color hover:border-custom-yellow-accent rounded-xl overflow-hidden shadow-md">
-                  <a href={result.videoLink} target="_blank" rel="noopener noreferrer">
-                    {result.thumbnailUrl && (
-                      <img src={result.thumbnailUrl} alt={result.videoTitle} className="w-full aspect-video object-cover" />
-                    )}
-                  </a>
-                  <CardContent className="p-3">
-                    <h3 className="text-sm font-semibold line-clamp-2 text-custom-text-primary">{result.videoTitle}</h3>
-                    <p className="text-xs text-custom-text-secondary mt-1">{result.channelName}</p>
-                  </CardContent>
-                </Card>
+          
+          {/* Estrutura da barra lateral com 3 partes: navegação, filtros (com rolagem) e rodapé fixo */}
+          <div className="flex flex-col h-[calc(100%-60px)] relative">
+            {/* 1. Navegação principal */}
+            <nav className="mb-4">
+              {sidebarNavItems.map((item) => (
+                <a
+                  key={item.nameKey}
+                  href={item.href}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (item.onClick) item.onClick();
+                  }}
+                  title={!isSidebarCollapsed ? "" : item.nameKey}
+                  className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors mb-1 ${isSidebarCollapsed ? "justify-center" : ""} ${item.current ? "bg-custom-yellow-accent text-custom-text-on-yellow font-semibold" : "hover:bg-custom-dark-bg hover:text-custom-yellow-accent text-custom-text-secondary"}`}
+                >
+                  <item.icon className={`h-5 w-5 ${isSidebarCollapsed ? "mx-auto" : ""}`} />
+                  {!isSidebarCollapsed && <span>{item.nameKey}</span>}
+                </a>
               ))}
-            </div>
-          </section>
-        )}
-
-
-        {!isSubscribed && !checkingSubscription && (
-          <Card className="mb-8 bg-custom-yellow-accent border-custom-yellow-hover">
-            <CardHeader><CardTitle className="text-custom-text-on-yellow">{t("premium_access")}</CardTitle></CardHeader>
-            <CardContent><p className="text-custom-text-on-yellow">{t("unlock_niche_search")}</p></CardContent>
-            <CardFooter><Button onClick={handleCheckout} className="bg-custom-card-bg text-custom-yellow-accent hover:bg-opacity-80 font-semibold">{t("subscribe_now")}</Button></CardFooter>
-          </Card>
-        )}
-
-        <Card className="mb-8 bg-custom-card-bg border-custom-border-color shadow-xl rounded-lg">
-          <CardHeader>
-            <CardTitle className="text-custom-yellow-accent text-2xl">{t("find_viral_niches_youtube")}</CardTitle>
-            <CardDescription className="text-custom-text-secondary">{t("search_viral_videos")}</CardDescription>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-            <div className="space-y-2 md:col-span-2 lg:col-span-1">
-              <Label htmlFor="niches" className="text-custom-text-secondary font-medium">{t("niches_select_one_or_more")}</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:bg-gray-700 hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md">
-                    {selectedNiches.length > 0 ? selectedNiches.map(n => t(n.toLowerCase().replace(/\s|&/g, "_"))).join(", ") : t("select_niches")}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[--radix-popover-trigger-width] max-h-60 overflow-y-auto p-0 bg-custom-card-bg border-custom-border-color rounded-md">
-                  <div className="p-2 space-y-1">
-                    {availableNiches.map((niche) => (
-                      <div key={niche} className="flex items-center space-x-2 p-1.5 hover:bg-custom-dark-bg rounded-md cursor-pointer" onClick={() => handleNicheChange(niche)}>
-                        <Checkbox
-                          id={`niche-${niche}`}
-                          checked={selectedNiches.includes(niche)}
-                          onCheckedChange={() => handleNicheChange(niche)}
-                          className="border-custom-border-color data-[state=checked]:bg-custom-yellow-accent data-[state=checked]:text-custom-text-on-yellow data-[state=checked]:border-custom-yellow-accent rounded"
-                        />
-                        <Label htmlFor={`niche-${niche}`} className="font-normal cursor-pointer flex-1 text-custom-text-primary">
-                          {t(niche.toLowerCase().replace(/\s|&/g, "_"))}
-                        </Label>
-                      </div>
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="videoPublishedDays" className="text-custom-text-secondary font-medium">{t("videos_published_last_days")}</Label>
-              <Select value={videoPublishedDays} onValueChange={setVideoPublishedDays}>
-                <SelectTrigger id="videoPublishedDays" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder={t("select_placeholder")} /></SelectTrigger>
-                <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
-                  <SelectItem value="7" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("days_7")}</SelectItem>
-                  <SelectItem value="30" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("days_30")}</SelectItem>
-                  <SelectItem value="90" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("days_90")}</SelectItem>
-                  <SelectItem value="180" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("days_180")}</SelectItem>
-                  <SelectItem value="365" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("days_365")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="maxSubs" className="text-custom-text-secondary font-medium">{t("max_subscribers_channel")}</Label>
-              <Select value={maxSubs} onValueChange={setMaxSubs}>
-                <SelectTrigger id="maxSubs" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder={t("select_placeholder")} /></SelectTrigger>
-                <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
-                  <SelectItem value="1000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("subs_1k")}</SelectItem>
-                  <SelectItem value="5000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("subs_5k")}</SelectItem>
-                  <SelectItem value="10000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("subs_10k")}</SelectItem>
-                  <SelectItem value="25000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("subs_25k")}</SelectItem>
-                  <SelectItem value="50000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("subs_50k")}</SelectItem>
-                  <SelectItem value="100000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("subs_100k")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="minViews" className="text-custom-text-secondary font-medium">{t("min_views_video")}</Label>
-              <Select value={minViews} onValueChange={setMinViews}>
-                <SelectTrigger id="minViews" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder={t("select_placeholder")} /></SelectTrigger>
-                <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
-                  <SelectItem value="1000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("views_1k")}</SelectItem>
-                  <SelectItem value="5000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("views_5k")}</SelectItem>
-                  <SelectItem value="10000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("views_10k")}</SelectItem>
-                  <SelectItem value="25000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("views_25k")}</SelectItem>
-                  <SelectItem value="50000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("views_50k")}</SelectItem>
-                  <SelectItem value="100000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("views_100k")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="maxChannelVideosTotal" className="text-custom-text-secondary font-medium">{t("max_videos_channel_total")}</Label>
-              <Select value={maxChannelVideosTotal} onValueChange={setMaxChannelVideosTotal}>
-                <SelectTrigger id="maxChannelVideosTotal" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder={t("select_placeholder")} /></SelectTrigger>
-                <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
-                  <SelectItem value="10" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("videos_10")}</SelectItem>
-                  <SelectItem value="20" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("videos_20")}</SelectItem>
-                  <SelectItem value="30" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("videos_30")}</SelectItem>
-                  <SelectItem value="50" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("videos_50")}</SelectItem>
-                  <SelectItem value="100" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("videos_100")}</SelectItem>
-                  <SelectItem value="999999" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("no_limit")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-          <CardFooter className="flex justify-end space-x-4 pt-6">
-            <Button 
-              onClick={handleExport} 
-              variant="outline" 
-              className="border-custom-yellow-accent text-custom-yellow-accent hover:bg-custom-yellow-accent hover:text-custom-text-on-yellow disabled:opacity-50 font-semibold rounded-md px-6 py-2.5"
-              disabled={filteredAndSortedResults.length === 0 || isLoading || (!isSubscribed && !checkingSubscription)}>
-              {t("export_csv")}
-            </Button>
-            <Button 
-              onClick={handleSearch} 
-              className="bg-custom-yellow-accent text-custom-text-on-yellow hover:bg-custom-yellow-hover disabled:opacity-50 font-semibold rounded-md px-6 py-2.5"
-              disabled={isLoading || selectedNiches.length === 0 || (!isSubscribed && !checkingSubscription)}>
-              {isLoading ? t("searching") : t("search_niches")}
-            </Button>
-          </CardFooter>
-        </Card>
-
-        {error && (
-          <Card className="mb-8 bg-red-900/30 border-red-700 text-custom-text-primary rounded-lg">
-            <CardHeader><CardTitle className="text-red-400">{t("error_title")}</CardTitle></CardHeader>
-            <CardContent><p>{error}</p></CardContent>
-          </Card>
-        )}
-
-        {isLoading && <p className="text-center text-custom-text-secondary py-10 text-lg">{t("loading_results")}</p>}
-
-        {!isLoading && allResults.length > 0 && (isSubscribed || checkingSubscription) && (
-          <div className="mt-10">
-            <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
-              <h2 className="text-2xl font-semibold text-custom-yellow-accent">{t("Número de resultados")} ({filteredAndSortedResults.length})</h2>
-              <div className="flex items-center gap-4">
-                <Select value={platformFilter} onValueChange={handlePlatformFilterChange} disabled={true}>
-                  <SelectTrigger className="w-auto sm:w-[200px] bg-custom-dark-bg border-custom-border-color text-custom-text-primary disabled:opacity-70 hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md">
-                    <ListFilter className="h-4 w-4 mr-2 text-custom-yellow-accent" />
-                    <SelectValue placeholder={t("filter_by_platform")} />
-                  </SelectTrigger>
-                  <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
-                    <SelectItem value="YouTube Shorts" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">YouTube Shorts</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={sortBy} onValueChange={handleSortByChange}>
-                  <SelectTrigger className="w-auto sm:w-[200px] bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md">
-                    <ArrowUpDown className="h-4 w-4 mr-2 text-custom-yellow-accent" />
-                    <SelectValue placeholder={t("sort_by")} />
-                  </SelectTrigger>
-                  <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
-                    <SelectItem value="views_desc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("most_viewed")}</SelectItem>
-                    <SelectItem value="views_asc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("least_viewed")}</SelectItem>
-                    <SelectItem value="date_desc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("most_recent")}</SelectItem>
-                    <SelectItem value="date_asc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">{t("least_recent")}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {paginatedResults.map((result, index) => (
-                <Card key={`${result.videoLink}-${index}`} className="flex flex-col bg-custom-card-bg border border-custom-border-color hover:border-custom-yellow-accent transition-all duration-200 ease-in-out shadow-lg hover:shadow-custom-yellow-accent/20 rounded-xl overflow-hidden">
-                  <CardHeader className="p-0 relative">
-                    {result.thumbnailUrl && (
-                      <a href={result.videoLink} target="_blank" rel="noopener noreferrer" className="block aspect-video">
-                        <img
-                          src={result.thumbnailUrl}
-                          alt={`Thumbnail for ${result.videoTitle}`}
-                          className="w-full h-full object-cover"
-                        />
-                      </a>
-                    )}
-                    {/* Badges de Fator Viral e Gênero */}
-                    <div className="absolute top-2 right-2 flex flex-col items-end space-y-1.5 z-10">
-                      <div className="flex items-center bg-orange-500/80 backdrop-blur-sm text-white text-xs font-semibold px-2 py-1 rounded-full shadow-md">
-                        <Flame className="w-3.5 h-3.5 mr-1 text-white" />
-                        <span>{calculateViralFactor(result.viewCount, result.subscriberCount)}</span>
-                      </div>
-                      {result.niche && (
-                        <div className="flex items-center bg-black/70 backdrop-blur-sm text-white text-xs font-medium px-2.5 py-1 rounded-full shadow-md">
-                          <span className="mr-1.5 text-sm">{getNicheEmoji(result.niche)}</span>
-                          <span>{t(result.niche.toLowerCase().replace(/\s|&/g, "_"))}</span>
-                        </div>
-                      )}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="absolute top-3 left-3 bg-black/70 hover:bg-black/90 text-custom-yellow-accent rounded-full h-9 w-9 flex items-center justify-center z-10"
-                      onClick={() => toggleFavorite(result.videoLink)}
+            </nav>
+            
+            {/* 2. Área de filtros com rolagem - altura calculada para deixar espaço para o rodapé */}
+            {!isSidebarCollapsed && (
+              <div className="overflow-hidden mb-20">
+                <h3 className="text-sm font-semibold text-custom-text-secondary uppercase tracking-wider mb-2">Niche Filters</h3>
+                <div className="grid grid-cols-1 gap-1 overflow-y-auto max-h-[calc(100vh-280px)] pr-1 custom-scrollbar">
+                  {availableNiches.map((niche) => (
+                    <div 
+                      key={niche} 
+                      className={`flex items-center p-1.5 rounded-md transition-all duration-200 ${
+                        selectedNiches.includes(niche) 
+                          ? "bg-custom-yellow-accent/10 border-l-2 border-custom-yellow-accent" 
+                          : "hover:bg-custom-dark-bg/30 border-l-2 border-transparent"
+                      }`}
                     >
-                      <Heart className={`h-5 w-5 ${favoritedVideos.includes(result.videoLink) ? "fill-custom-yellow-accent text-custom-yellow-accent" : "text-custom-yellow-accent"}`} />
-                    </Button>
-                  </CardHeader>
-                  <CardContent className="p-4 flex-grow flex flex-col">
-                    <h3 className="font-semibold text-base leading-snug mb-1.5 text-custom-text-primary">
-                      <a href={result.videoLink} target="_blank" rel="noopener noreferrer" title={result.videoTitle} className="hover:text-custom-yellow-accent line-clamp-2">
-                        {result.videoTitle || t("title_unavailable")}
-                      </a>
-                    </h3>
-                    <p className="text-sm text-custom-text-secondary mb-2">
-                      <a href={result.channelLink} target="_blank" rel="noopener noreferrer" className="hover:text-custom-yellow-accent">
-                        {result.channelName || t("channel_unknown")}
-                      </a>
-                    </p>
-                    <div className="text-xs text-custom-text-secondary space-x-2 mb-3 flex items-center flex-wrap gap-y-1">
-                      <span>{new Date(result.publishedAt).toLocaleDateString()}</span>
-                      <span className="text-custom-yellow-accent font-medium">{result.platform}</span>
-                      {/* O nicho agora é exibido no badge superior */}
+                      <Checkbox
+                        id={`niche-${niche}`}
+                        checked={selectedNiches.includes(niche)}
+                        onCheckedChange={() => handleNicheChange(niche)}
+                        className="data-[state=checked]:bg-custom-yellow-accent data-[state=checked]:border-custom-yellow-accent mr-2"
+                      />
+                      <label
+                        htmlFor={`niche-${niche}`}
+                        className={`text-sm cursor-pointer flex items-center flex-1 ${
+                          selectedNiches.includes(niche) ? "text-custom-yellow-accent font-medium" : "text-custom-text-primary"
+                        }`}
+                      >
+                        <span className="mr-2 text-base">{getNicheEmoji(niche)}</span>
+                        <span>{niche}</span>
+                      </label>
                     </div>
-                  </CardContent>
-                  <CardFooter className="p-4 pt-0 text-xs text-custom-text-secondary grid grid-cols-3 gap-2 border-t border-custom-border-color mt-auto">
-                    <div className="text-center py-2">
-                      <p className="font-bold text-sm text-custom-text-primary">{Number(result.viewCount || 0).toLocaleString()}</p>
-                      <p className="text-custom-text-secondary">{t("views")}</p>
-                    </div>
-                    <div className="text-center py-2 border-x border-custom-border-color">
-                      <p className="font-bold text-sm text-custom-text-primary">{Number(result.likeCount || 0).toLocaleString()}</p>
-                      <p className="text-custom-text-secondary">{t("likes")}</p>
-                    </div>
-                    <div className="text-center py-2">
-                      <p className="font-bold text-sm text-custom-text-primary">{Number(result.commentCount || 0).toLocaleString()}</p>
-                      <p className="text-custom-text-secondary">{t("comments")}</p>
-                    </div>
-                  </CardFooter>
-                </Card>
-              ))}
-            </div>
-
-            {totalPages > 1 && (
-              <div className="mt-10 flex justify-center items-center space-x-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                  className="bg-custom-card-bg border-custom-border-color text-custom-yellow-accent hover:bg-custom-dark-bg hover:border-custom-yellow-accent disabled:opacity-50 rounded-md w-9 h-9"
-                >
-                  <ChevronLeft className="h-5 w-5" />
-                </Button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
-                  <Button
-                    key={page}
-                    variant={currentPage === page ? "default" : "outline"}
-                    size="icon"
-                    onClick={() => setCurrentPage(page)}
-                    className={`${currentPage === page 
-                      ? "bg-custom-yellow-accent text-custom-text-on-yellow hover:bg-custom-yellow-hover font-semibold"
-                      : "bg-custom-card-bg border-custom-border-color text-custom-text-secondary hover:border-custom-yellow-accent hover:text-custom-yellow-accent"} rounded-md w-9 h-9`}
-                  >
-                    {page}
-                  </Button>
-                ))}
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                  className="bg-custom-card-bg border-custom-border-color text-custom-yellow-accent hover:bg-custom-dark-bg hover:border-custom-yellow-accent disabled:opacity-50 rounded-md w-9 h-9"
-                >
-                  <ChevronRight className="h-5 w-5" />
-                </Button>
+                  ))}
+                </div>
               </div>
             )}
+            
+            {/* 3. Rodapé fixo da barra lateral - posicionamento absoluto para garantir visibilidade */}
+            <div className={`absolute bottom-0 left-0 right-0 pt-3 border-t border-custom-border-color bg-custom-card-bg ${isSidebarCollapsed ? "px-0" : "px-0"}`}>
+              {!isSidebarCollapsed && (
+                <Button variant="outline" className="w-full bg-blue-500 hover:bg-blue-600 text-white border-blue-500 font-semibold mb-3">
+                  <MessageCircle className="mr-2 h-4 w-4" /> Join Telegram Group
+                </Button>
+              )}
+              
+              {/* Botão de Logout renderizado diretamente, sem usar o loop */}
+              <a
+                href="#"
+                title={!isSidebarCollapsed ? "" : "Logout"}
+                className={`flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-custom-dark-bg hover:text-custom-yellow-accent text-custom-text-secondary transition-colors ${isSidebarCollapsed ? "justify-center" : ""}`}
+              >
+                <LogOut className={`h-5 w-5 ${isSidebarCollapsed ? "mx-auto" : ""}`} />
+                {!isSidebarCollapsed && <span>Logout</span>}
+              </a>
+            </div>
           </div>
-        )}
+        </aside>
 
-        {!isLoading && allResults.length === 0 && !error && (isSubscribed || checkingSubscription) && (
-          <p className="text-center mt-10 text-custom-text-secondary text-lg">{t("no_results_found")}</p>
-        )}
-      </main>
-    </div>
+        <main className={`flex-1 p-6 md:p-10 overflow-y-auto transition-all duration-300 ease-in-out ${isSidebarCollapsed ? "ml-20" : "ml-64"}`}>
+          <div className="flex justify-between items-center mb-8">
+            <div>
+              <h2 className="text-3xl font-semibold text-custom-text-primary">Welcome To Niche!</h2>
+            </div>
+          </div>
+
+          {!showSavedChannels && (
+            <Card className="mb-8 bg-custom-card-bg border border-custom-border-color shadow-lg rounded-lg overflow-hidden">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xl font-semibold text-custom-yellow-accent">Find viral niches on YouTube</CardTitle>
+                <CardDescription className="text-custom-text-secondary">
+                  Search for viral videos with advanced filters
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex flex-col md:flex-row gap-4">
+                  <div className="flex-1 relative">
+                    <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                      <Search className="h-5 w-5 text-custom-text-secondary" />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Search for niches"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-custom-dark-bg border border-custom-border-color text-custom-text-primary rounded-md focus:outline-none focus:ring-2 focus:ring-custom-yellow-accent"
+                    />
+                  </div>
+                  <Button 
+                    onClick={handleSearch} 
+                    className="bg-custom-yellow-accent text-custom-text-on-yellow hover:bg-custom-yellow-hover disabled:opacity-50 font-semibold rounded-md px-6 py-2.5"
+                    disabled={isLoading || selectedNiches.length === 0 || (!isSubscribed && !checkingSubscription)}>
+                    {isLoading ? "Searching..." : "Search Niches"}
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="videoPublishedDays" className="text-custom-text-secondary font-medium">Videos published in last days</Label>
+                    <Select value={videoPublishedDays} onValueChange={setVideoPublishedDays}>
+                      <SelectTrigger id="videoPublishedDays" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
+                        <SelectItem value="7" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">7 days</SelectItem>
+                        <SelectItem value="14" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">14 days</SelectItem>
+                        <SelectItem value="30" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">30 days</SelectItem>
+                        <SelectItem value="60" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">60 days</SelectItem>
+                        <SelectItem value="90" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">90 days</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="maxSubs" className="text-custom-text-secondary font-medium">Max. Channel Subscribers</Label>
+                    <Select value={maxSubs} onValueChange={setMaxSubs}>
+                      <SelectTrigger id="maxSubs" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
+                        <SelectItem value="1000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">1,000</SelectItem>
+                        <SelectItem value="5000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">5,000</SelectItem>
+                        <SelectItem value="10000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">10,000</SelectItem>
+                        <SelectItem value="50000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">50,000</SelectItem>
+                        <SelectItem value="100000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">100,000</SelectItem>
+                        <SelectItem value="1000000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">1,000,000</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="minViews" className="text-custom-text-secondary font-medium">Min. Video Views</Label>
+                    <Select value={minViews} onValueChange={setMinViews}>
+                      <SelectTrigger id="minViews" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
+                        <SelectItem value="1000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">1,000</SelectItem>
+                        <SelectItem value="5000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">5,000</SelectItem>
+                        <SelectItem value="10000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">10,000</SelectItem>
+                        <SelectItem value="50000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">50,000</SelectItem>
+                        <SelectItem value="100000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">100,000</SelectItem>
+                        <SelectItem value="1000000" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">1,000,000</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="maxChannelVideosTotal" className="text-custom-text-secondary font-medium">Max. Channel Videos Total</Label>
+                    <Select value={maxChannelVideosTotal} onValueChange={setMaxChannelVideosTotal}>
+                      <SelectTrigger id="maxChannelVideosTotal" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
+                        <SelectItem value="10" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">10 videos</SelectItem>
+                        <SelectItem value="20" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">20 videos</SelectItem>
+                        <SelectItem value="50" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">50 videos</SelectItem>
+                        <SelectItem value="100" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">100 videos</SelectItem>
+                        <SelectItem value="999999" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">No limit</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                  <div className="flex items-center space-x-2">
+                    <Label htmlFor="sortBy" className="text-custom-text-secondary font-medium whitespace-nowrap">Sort by:</Label>
+                    <Select value={sortBy} onValueChange={handleSortByChange}>
+                      <SelectTrigger id="sortBy" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md w-[180px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
+                        <SelectItem value="views_desc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">Views (High to Low)</SelectItem>
+                        <SelectItem value="views_asc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">Views (Low to High)</SelectItem>
+                        <SelectItem value="date_desc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">Date (Newest First)</SelectItem>
+                        <SelectItem value="date_asc" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">Date (Oldest First)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <Label htmlFor="platformFilter" className="text-custom-text-secondary font-medium whitespace-nowrap">Platform:</Label>
+                    <Select value={platformFilter} onValueChange={handlePlatformFilterChange} disabled>
+                      <SelectTrigger id="platformFilter" className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent focus:ring-custom-yellow-accent rounded-md w-[180px]"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent className="bg-custom-card-bg border-custom-border-color text-custom-text-primary rounded-md">
+                        <SelectItem value="all" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">All Platforms</SelectItem>
+                        <SelectItem value="YouTube Shorts" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">YouTube Shorts</SelectItem>
+                        <SelectItem value="TikTok" className="hover:bg-custom-dark-bg hover:text-custom-yellow-accent">TikTok</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <Button
+                    onClick={handleExport}
+                    disabled={filteredAndSortedResults.length === 0}
+                    variant="outline"
+                    className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent hover:text-custom-yellow-accent rounded-md px-4 py-2"
+                  >
+                    Export CSV
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {error && (
+            <div className="bg-red-900/20 border border-red-500 text-red-400 p-4 rounded-md mb-6">
+              <p>{error}</p>
+              {!isSubscribed && !checkingSubscription && (
+                <Button onClick={handleCheckout} className="mt-2 bg-custom-yellow-accent text-custom-text-on-yellow hover:bg-custom-yellow-hover">
+                  Subscribe Now
+                </Button>
+              )}
+            </div>
+          )}
+
+          {showSavedChannels && savedChannels.length === 0 && (
+            <div className="text-center py-12">
+              <p className="text-custom-text-secondary text-lg">No saved channels yet.</p>
+              <p className="text-custom-text-secondary mt-2">Search for videos and click the heart icon to save them.</p>
+            </div>
+          )}
+
+          {/* Controles de paginação da API */}
+          {!showSavedChannels && allResults.length > 0 && apiTotalPages > 1 && (
+            <div className="flex justify-center items-center space-x-2 my-6 bg-custom-card-bg border border-custom-border-color p-4 rounded-lg">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => loadApiPage(apiCurrentPage - 1)} 
+                disabled={apiCurrentPage === 1 || isLoading}
+                className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent hover:text-custom-yellow-accent"
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" /> Página Anterior
+              </Button>
+              
+              <div className="text-sm text-custom-text-primary">
+                <span className="font-medium">Página {apiCurrentPage}</span> de {apiTotalPages} 
+                <span className="text-custom-text-secondary ml-2">
+                  ({apiTotalResults} resultados totais)
+                </span>
+              </div>
+              
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => loadApiPage(apiCurrentPage + 1)} 
+                disabled={apiCurrentPage === apiTotalPages || isLoading}
+                className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent hover:text-custom-yellow-accent"
+              >
+                Próxima Página <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
+          )}
+
+          {isLoading ? (
+            <div className="flex justify-center items-center py-20">
+              <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-custom-yellow-accent"></div>
+            </div>
+          ) : (
+            <>
+              {paginatedResults.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                  {paginatedResults.map((result, index) => (
+                    <div 
+                      key={`${result.videoLink}-${index}`} 
+                      className="relative group bg-custom-card-bg border border-custom-border-color rounded-lg overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300 hover:border-custom-yellow-accent/50 max-w-[350px] cursor-pointer"
+                      onClick={() => openVideoLink(result.videoLink)}
+                    >
+                      {/* Thumbnail com overlay */}
+                      <div className="relative aspect-video">
+                        <img 
+                          src={result.thumbnailUrl || "https://via.placeholder.com/320x180?text=No+Thumbnail"} 
+                          alt={result.videoTitle} 
+                          className="w-full object-cover"
+                        />
+                        
+                        {/* Tag de conteúdo */}
+                        <div className="absolute top-2 right-2 bg-amber-500 text-black text-xs font-bold px-3 py-0.5 rounded-full flex items-center">
+                          <span className="text-lg mr-2">{getNicheEmoji(result.niche)}</span>
+                          <span className="text-sm">{result.niche || "Unknown"}</span>
+                          <Flame className="h-4 w-4 mr-0 ml-2" />
+                          {calculateViralFactor(result.viewCount, result.subscriberCount)}
+                        </div>
+                        
+                        {/* Overlay com gradiente */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent flex flex-col justify-end p-3">
+                          <h3 className="text-white font-semibold text-sm line-clamp-2 mb-1">{result.videoTitle}</h3>
+                          <p className="text-gray-300 text-xs">{result.channelName}</p>
+                          
+                          {/* Data destacada */}
+                          <div className="absolute bottom-3 right-3 bg-amber-500 text-black font-bold text-xs px-3 py-1.5 rounded-full">
+                            {formatDate(result.publishedAt)}
+                          </div>
+                        </div>
+                        
+                        {/* Botão de favorito */}
+                        <button 
+                          onClick={(e) => toggleFavorite(e, result)} 
+                          className="absolute top-2 left-2 bg-black/50 p-1.5 rounded-full hover:bg-black/70 transition-colors z-10"
+                        >
+                          <Heart 
+                            className={`h-4 w-4 ${favoritedVideos.includes(result.videoLink) ? "fill-red-500 text-red-500" : "text-white"}`} 
+                          />
+                        </button>
+                        
+                        {/* Ícone de link externo para indicar que é clicável */}
+                        <div className="absolute top-2 left-10 bg-black/50 p-1.5 rounded-full transition-opacity opacity-0 group-hover:opacity-100">
+                          <ExternalLink className="h-4 w-4 text-white" />
+                        </div>
+                      </div>
+                      
+                      {/* Estatísticas */}
+                      <div className="grid grid-cols-3 divide-x divide-custom-border-color border-t border-custom-border-color">
+                        <div className="bg-amber-500 text-black p-2 text-center">
+                          <p className="text-xs font-semibold">VIEWS</p>
+                          <p className="font-bold">{formatLargeNumber(result.viewCount)}</p>
+                        </div>
+                        <div className="p-2 text-center">
+                          <p className="text-xs text-custom-text-secondary">LIKES</p>
+                          <p className="font-medium text-custom-text-primary">{formatLargeNumber(result.likeCount || 0)}</p>
+                        </div>
+                        <div className="p-2 text-center">
+                          <p className="text-xs text-custom-text-secondary">COMMENTS</p>
+                          <p className="font-medium text-custom-text-primary">{formatLargeNumber(result.commentCount || 0)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                !isLoading && !error && (
+                  <div className="text-center py-12">
+                    <p className="text-custom-text-secondary text-lg">No results found.</p>
+                    <p className="text-custom-text-secondary mt-2">Try adjusting your search filters.</p>
+                  </div>
+                )
+              )}
+
+              {/* Paginação local (para navegação dentro dos resultados já carregados) */}
+              {totalPages > 1 && (
+                <div className="flex justify-center items-center space-x-2 my-6">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} 
+                    disabled={currentPage === 1}
+                    className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent hover:text-custom-yellow-accent"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  
+                  <div className="text-sm text-custom-text-secondary">
+                    Page {currentPage} of {totalPages}
+                  </div>
+                  
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} 
+                    disabled={currentPage === totalPages}
+                    className="bg-custom-dark-bg border-custom-border-color text-custom-text-primary hover:border-custom-yellow-accent hover:text-custom-yellow-accent"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </main>
+      </div>
+    </>
   );
 }
-

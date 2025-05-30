@@ -2,7 +2,7 @@
 
 import os
 import sys
-# DON'T CHANGE THIS !!!
+# DON\'T CHANGE THIS !!!
 # Adiciona o diretório pai ao sys.path para permitir importações absolutas como src.models
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -12,9 +12,7 @@ from flask_cors import CORS # Importar Flask-CORS
 from src.routes.user import user_bp
 from src.routes.youtube import youtube_bp
 from src.routes.stripe_payment import payment_bp
-from src.routes.viral_search import viral_search_bp
-from src.routes.auth import auth_bp  # Adicionado - Importação do blueprint de autenticação
-from src.models.user import db  # Importação do db do modelo de usuário
+from src.routes.viral_search import viral_search_bp # <<< ADICIONADO IMPORT
 # from src.scheduler import init_scheduler # Removido - Scheduler não está sendo usado
 
 # Inicializa a aplicação Flask
@@ -27,21 +25,26 @@ app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "default_secret_key_for
 # Para produção, você pode querer restringir a `origins` para o seu domínio de produção.
 CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "https://niche-frontend-app-7b9e44e9b75d.herokuapp.com"]}} )
 
-# Configuração do banco de dados
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///niche.db")
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-db.init_app(app)
-
 # Registrar Blueprints (rotas modulares)
 app.register_blueprint(user_bp, url_prefix="/api") # Rotas de usuário (se houver)
 app.register_blueprint(youtube_bp, url_prefix="/api/youtube") # Rotas da API do YouTube
 app.register_blueprint(payment_bp, url_prefix="/api/payment") # Rotas de pagamento Stripe
-app.register_blueprint(viral_search_bp, url_prefix="/api/search") # Rotas de busca viral
-app.register_blueprint(auth_bp) # Rotas de autenticação (já tem prefix /api/auth)
+app.register_blueprint(viral_search_bp, url_prefix="/api/search") # <<< ADICIONADO REGISTRO DO BLUEPRINT
 
-# Criar tabelas do banco de dados
-with app.app_context():
-    db.create_all()
+# --- Configuração do Banco de Dados (Desativado) ---
+# A funcionalidade que usava o DB foi removida.
+# Mantenha comentado caso precise reativar no futuro.
+# app.config["SQLALCHEMY_DATABASE_URI"] = f"mysql+pymysql://{os.getenv("DB_USERNAME", "root")}:{os.getenv("DB_PASSWORD", "password")}@{os.getenv("DB_HOST", "localhost")}:{os.getenv("DB_PORT", "3306")}/{os.getenv("DB_NAME", "mydb")}"
+# app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# db.init_app(app)
+# with app.app_context():
+#     db.create_all()
+# ----------------------------------------------------
+
+# --- Inicialização do Scheduler (Desativado) ---
+# A funcionalidade de tarefas agendadas foi removida.
+# scheduler = init_scheduler(app)
+# ------------------------------------------------
 
 # Rota para servir o frontend React (build estático) - Esta parte não é usada quando o frontend está em modo de desenvolvimento (pnpm dev)
 @app.route("/", defaults={"path": ""})
@@ -71,3 +74,4 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
     # Use waitress-serve em vez disso para produção:
     # waitress-serve --host=0.0.0.0 --port=5000 src.main:app
+
